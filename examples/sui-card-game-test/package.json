@@ -1,0 +1,30 @@
+{
+  "name": "sui-card-game-test",
+  "version": "1.0.0",
+  "description": "加密卡牌游戏逻辑测试",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc"
+  },
+  "keywords": [
+    "sui",
+    "seal",
+    "card-game",
+    "encryption"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.2",
+    "vitest": "^1.4.0"
+  },
+  "dependencies": {
+    "@mysten/seal": "^0.3.0",
+    "@mysten/sui": "^1.25.0"
+  }
+}
