@@ -8,6 +8,9 @@ import { SuiClient } from '@mysten/sui/client';
 import { Transaction } from '@mysten/sui/transactions';
 import { fromHex } from '@mysten/sui/utils';
 
+// 缓存规范化后的密钥服务器ID
+const normalizedServerIdsCache = new Map<string, string>();
+
 /**
  * 生成随机ID
  * @returns 随机字符串ID
@@ -136,43 +139,185 @@ export function drawCard<T>(deck: T[]): [T | undefined, T[]] {
 }
 
 /**
+ * 规范化服务器ID
+ * 确保所有ID格式一致，避免多次转换
+ * 
+ * @param id 原始ID
+ * @returns 规范化后的ID
+ */
+export function normalizeServerId(id: string): string {
+  // 检查缓存
+  if (normalizedServerIdsCache.has(id)) {
+    return normalizedServerIdsCache.get(id)!;
+  }
+  
+  let normalizedId = id;
+  // 如果不是0x开头的十六进制，则转换
+  if (!id.startsWith('0x')) {
+    normalizedId = '0x' + Buffer.from(id).toString('hex');
+  }
+  
+  // 存入缓存
+  normalizedServerIdsCache.set(id, normalizedId);
+  return normalizedId;
+}
+
+/**
+ * 规范化服务器ID列表
+ * 批量处理多个ID
+ * 
+ * @param ids 原始ID列表
+ * @returns 规范化后的ID列表
+ */
+export function normalizeServerIds(ids: string[]): string[] {
+  return ids.map(id => normalizeServerId(id));
+}
+
+/**
+ * 根据负载均衡策略选择密钥服务器
+ * 使用随机抽样方式选择服务器，避免固定使用相同顺序的服务器
+ * 
+ * @param availableServerIds 可用服务器ID列表
+ * @param threshold 所需的最小服务器数量
+ * @returns 选择的服务器ID列表
+ */
+export function selectKeyServers(
+  availableServerIds: string[],
+  threshold: number
+): string[] {
+  // 如果可用服务器数量等于或小于阈值，则返回所有服务器
+  if (availableServerIds.length <= threshold) {
+    return [...availableServerIds];
+  }
+  
+  // 复制数组避免修改原数组
+  const shuffled = [...availableServerIds];
+  
+  // 随机打乱服务器顺序
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  
+  // 返回前threshold+1个服务器（多选1个作为备用）
+  return shuffled.slice(0, Math.min(threshold + 1, shuffled.length));
+}
+
+/**
+ * 批量加密多个卡牌
+ * 通过分组并行处理，提高加密效率
+ * 
+ * @param sealClient Seal客户端
+ * @param cards 卡牌列表
+ * @param packageId 包ID
+ * @param threshold 阈值
+ * @param serverObjectIds 服务器对象ID列表
+ * @param batchSize 批处理大小
+ * @returns 加密后的卡牌列表
+ */
+async function batchEncryptCards(
+  sealClient: SealClient,
+  cards: Card[],
+  packageId: string,
+  threshold: number,
+  serverObjectIds: string[],
+  batchSize: number = 10
+): Promise<EncryptedCard[]> {
+  const results: EncryptedCard[] = [];
+  
+  // 规范化服务器ID
+  const normalizedServerIds = normalizeServerIds(serverObjectIds);
+  
+  // 根据负载均衡策略选择服务器
+  const selectedServerIds = selectKeyServers(normalizedServerIds, threshold);
+  
+  // 分批处理
+  for (let i = 0; i < cards.length; i += batchSize) {
+    const batch = cards.slice(i, i + batchSize);
+    
+    // 并行处理当前批次
+    const batchPromises = batch.map(async (card) => {
+      const cardData = new TextEncoder().encode(JSON.stringify(card));
+      
+      // 使用Seal加密
+      const encryptedResult = await sealClient.encrypt({
+        threshold,
+        packageId,
+        id: `card-${card.id}`,
+        data: cardData
+      });
+      
+      return {
+        id: card.id,
+        encryptedData: encryptedResult.encryptedObject,
+        threshold: threshold,
+        innerIds: selectedServerIds,
+        ptbId: undefined
+      } as EncryptedCard;
+    });
+    
+    // 等待当前批次完成
+    const batchResults = await Promise.all(batchPromises);
+    results.push(...batchResults);
+    
+    // 添加进度日志
+    console.log(`已加密 ${results.length}/${cards.length} 张卡牌`);
+  }
+  
+  return results;
+}
+
+/**
  * 使用Seal加密牌组
+ * 改进版本：添加批量处理和服务器负载均衡
+ * 
  * @param sealClient Seal客户端
  * @param deck 牌组
  * @param packageId 包ID
  * @param threshold 阈值
+ * @param serverObjectIds 服务器对象ID列表
+ * @param batchSize 批处理大小
  * @returns 加密后的牌组
  */
 export async function encryptDeck(
   sealClient: SealClient, 
   deck: Card[], 
   packageId: string,
-  threshold: number = 2
+  threshold: number = 2,
+  serverObjectIds: string[] = [],
+  batchSize: number = 10
 ): Promise<EncryptedCard[]> {
-  const encryptedCards: EncryptedCard[] = [];
+  // 记录开始时间
+  const startTime = Date.now();
   
-  for (const card of deck) {
-    const cardData = new TextEncoder().encode(JSON.stringify(card));
-    
-    // 使用Seal加密，为每张牌设置唯一标识
-    const encryptedResult = await sealClient.encrypt({
-      threshold, // 需要至少threshold个密钥服务器才能解密
-      packageId,
-      id: `card-${card.id}`,
-      data: cardData
-    });
-    
-    encryptedCards.push({
-      id: card.id,
-      encryptedData: encryptedResult.encryptedObject
-    });
-  }
+  // 使用批量加密
+  const encryptedCards = await batchEncryptCards(
+    sealClient,
+    deck,
+    packageId,
+    threshold,
+    serverObjectIds,
+    batchSize
+  );
+  
+  // 记录性能统计
+  const duration = Date.now() - startTime;
+  const avgTime = duration / encryptedCards.length;
+  console.info(`牌组加密完成：${encryptedCards.length}张卡牌，总耗时${duration}ms，平均每张${avgTime.toFixed(2)}ms`);
   
   return encryptedCards;
 }
 
 /**
  * 根据服务器对象ID列表初始化Seal客户端
+ * 对应Seal SDK中SealClient的初始化方式：
+ * - suiClient: 用于与Sui链交互
+ * - serverObjectIds: 密钥服务器对象ID列表，用于分布式密钥管理
+ * 
+ * 注意：在Seal SDK的实现中，serverObjectIds是SealClient的私有成员(#serverObjectIds)，
+ * 无法直接访问，但在初始化时必须提供。我们需要在游戏状态中维护这个列表用于后续操作。
+ * SealClient会在内部验证这些服务器的有效性，并用于加密和解密过程。
+ * 
  * @param suiClient Sui客户端
  * @param serverObjectIds 服务器对象ID列表
  * @returns Seal客户端
@@ -189,6 +334,9 @@ export function initializeSealClient(
 
 /**
  * 构建交易字节
+ * 用于创建Seal解密所需的交易字节(txBytes)
+ * 优化了ID处理逻辑，使用缓存的规范化ID
+ * 
  * @param packageId 包ID
  * @param moduleName 模块名称
  * @param suiClient Sui客户端
@@ -202,17 +350,14 @@ export async function constructTxBytes(
   innerIds: string[],
 ): Promise<Uint8Array> {
   const tx = new Transaction();
-  for (const innerId of innerIds) {
-    // 确保innerId是合法的十六进制，如果不是则将其转换为十六进制
-    let hexId = innerId;
-    if (!innerId.startsWith('0x')) {
-      // 将普通字符串转换为十六进制
-      hexId = '0x' + Buffer.from(innerId).toString('hex');
-    }
-    
-    // 使用字符串直接作为参数，而不是尝试将其转换为二进制
-    const keyIdArg = tx.pure.string(innerId);
-    const objectArg = tx.object(hexId);
+  
+  // 使用规范化后的ID列表
+  const normalizedIds = normalizeServerIds(innerIds);
+  
+  for (const innerId of normalizedIds) {
+    // 直接使用规范化的ID，不再需要转换
+    const keyIdArg = tx.pure.vector('u8', fromHex(innerId));
+    const objectArg = tx.object(innerId);
     tx.moveCall({
       target: `${packageId}::${moduleName}::seal_approve`,
       arguments: [keyIdArg, objectArg],
@@ -225,9 +370,14 @@ export async function constructTxBytes(
  * 初始化游戏状态
  * @param playerAddresses 玩家地址数组
  * @param seed 随机种子
+ * @param keyServerIds 密钥服务器ID列表
  * @returns 初始化的游戏状态
  */
-export function initializeGameState(playerAddresses: string[], seed: string = Date.now().toString()): GameState {
+export function initializeGameState(
+  playerAddresses: string[], 
+  seed: string = Date.now().toString(),
+  keyServerIds: string[] = []
+): GameState {
   // 创建玩家
   const players: Player[] = playerAddresses.map(address => ({
     address,
@@ -242,7 +392,8 @@ export function initializeGameState(playerAddresses: string[], seed: string = Da
     deck: [], // 初始牌组为空，需要后续加密
     logs: [],
     seed,
-    gameOver: false
+    gameOver: false,
+    keyServerIds
   };
 }
 
@@ -275,4 +426,69 @@ export function addGameLog(
     ...state,
     logs: [...state.logs, newLog]
   };
+}
+
+/**
+ * 检查密钥服务器健康状态
+ * 通过尝试简单的加密操作测试密钥服务器是否正常工作
+ * 
+ * @param sealClient Seal客户端
+ * @returns 密钥服务器是否健康的布尔值
+ */
+export async function checkKeyServerHealth(
+  sealClient: SealClient
+): Promise<boolean> {
+  try {
+    // 创建一个小测试数据
+    const testData = new TextEncoder().encode('health-check');
+    
+    // 尝试加密操作，这会触发与密钥服务器的通信
+    await sealClient.encrypt({
+      threshold: 1,
+      packageId: 'health-check',
+      id: 'health-check-' + Date.now(),
+      data: testData
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('密钥服务器健康检查失败:', error);
+    return false;
+  }
+}
+
+/**
+ * 获取健康的密钥服务器ID列表
+ * 对多个密钥服务器进行健康检查，返回可用的服务器ID
+ * 
+ * @param suiClient Sui客户端
+ * @param serverObjectIds 要检查的服务器ID列表
+ * @returns 健康的服务器ID列表
+ */
+export async function getHealthyKeyServers(
+  suiClient: SuiClient,
+  serverObjectIds: string[]
+): Promise<string[]> {
+  const healthyServers: string[] = [];
+  
+  // 为每个服务器创建单独的客户端进行测试
+  for (const serverId of serverObjectIds) {
+    try {
+      const client = new SealClient({
+        suiClient,
+        serverObjectIds: [serverId],
+        verifyKeyServers: true
+      });
+      
+      const isHealthy = await checkKeyServerHealth(client);
+      if (isHealthy) {
+        healthyServers.push(serverId);
+      }
+    } catch (error) {
+      console.warn(`服务器 ${serverId} 健康检查异常:`, error);
+      // 出现异常视为不健康，继续检查其他服务器
+    }
+  }
+  
+  return healthyServers;
 } 

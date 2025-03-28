@@ -9,11 +9,13 @@ import {
   generateInitialDeck, 
   shuffleDeck, 
   initializeGameState, 
-  initializeSealClient
+  initializeSealClient,
+  getHealthyKeyServers
 } from '../game-utils';
 import { initializeGame } from '../game-logic';
 import { CardType } from '../models';
 import { createKeypairFromBase64 } from '../crypto-operations';
+import { KeyServerError, ThresholdError } from '../errors';
 
 // 模拟Seal客户端
 vi.mock('@mysten/seal', () => {
@@ -78,6 +80,18 @@ vi.mock('@mysten/sui/transactions', () => {
   };
 });
 
+// 模拟getHealthyKeyServers函数
+vi.mock('../game-utils', async () => {
+  const actual = await vi.importActual('../game-utils');
+  return {
+    ...(actual as object),
+    getHealthyKeyServers: vi.fn().mockImplementation(async (_, serverObjectIds) => {
+      // 假设所有服务器都健康
+      return serverObjectIds;
+    })
+  };
+});
+
 // 测试私钥（示例用，实际使用时应当替换为真实的私钥）
 const TEST_PRIVATE_KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='; // 仅用于测试的伪私钥
 
@@ -124,7 +138,10 @@ describe('游戏初始化', () => {
       '0xfedcba987654321'
     ];
     
-    const gameState = initializeGameState(playerAddresses, 'test-seed');
+    // 添加密钥服务器ID
+    const keyServerIds = ['server1', 'server2', 'server3'];
+    
+    const gameState = initializeGameState(playerAddresses, 'test-seed', keyServerIds);
     
     // 验证游戏状态
     expect(gameState.players.length).toBe(2);
@@ -135,6 +152,7 @@ describe('游戏初始化', () => {
     expect(gameState.logs.length).toBe(0);
     expect(gameState.seed).toBe('test-seed');
     expect(gameState.gameOver).toBe(false);
+    expect(gameState.keyServerIds).toEqual(keyServerIds);
   });
   
   it('应该能正确洗牌', () => {
@@ -166,7 +184,10 @@ describe('游戏初始化', () => {
       '0xfedcba987654321'
     ];
     
-    const gameState = initializeGameState(playerAddresses, 'test-seed');
+    // 添加密钥服务器ID
+    const keyServerIds = ['server1', 'server2', 'server3'];
+    
+    const gameState = initializeGameState(playerAddresses, 'test-seed', keyServerIds);
     const packageId = '0x12345';
     
     // 初始化游戏
@@ -184,5 +205,26 @@ describe('游戏初始化', () => {
     expect(initializedGame.players[1].hand.length).toBe(5);
     expect(initializedGame.logs.length).toBe(1); // 应有一条初始化完成的日志
     expect(initializedGame.logs[0].message).toBe('游戏初始化完成');
+    expect(initializedGame.keyServerIds).toEqual(keyServerIds); // 保留服务器ID
+  });
+  
+  it('当阈值不合理时应抛出错误', async () => {
+    const playerAddresses = [
+      '0x123456789abcdef',
+      '0xfedcba987654321'
+    ];
+    
+    const keyServerIds = ['server1', 'server2', 'server3'];
+    const gameState = initializeGameState(playerAddresses, 'test-seed', keyServerIds);
+    const packageId = '0x12345';
+    
+    // 使用无效的阈值
+    await expect(initializeGame(
+      sealClient,
+      suiClient,
+      gameState,
+      packageId,
+      1 // 阈值小于2
+    )).rejects.toThrow(ThresholdError);
   });
 }); 

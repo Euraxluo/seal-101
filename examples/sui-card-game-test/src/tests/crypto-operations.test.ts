@@ -7,18 +7,21 @@ import { SealClient, SessionKey } from '@mysten/seal';
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { 
   createKeypairFromBase64, 
-  createSessionKey, 
+  createSessionKey,
+  getOrCreateSessionKey,
   decryptCard, 
   viewTopCards 
 } from '../crypto-operations';
 import { initializeSealClient } from '../game-utils';
 import { Card, CardType, EncryptedCard } from '../models';
+import { CardError, PermissionError } from '../errors';
 
 // 模拟Seal客户端
 vi.mock('@mysten/seal', () => {
   return {
     SealClient: vi.fn().mockImplementation(() => {
       return {
+        serverObjectIds: ['server1', 'server2', 'server3'],
         encrypt: vi.fn().mockImplementation(async ({ data }) => {
           // 简单地将数据作为加密结果返回
           return {
@@ -165,11 +168,26 @@ describe('加密操作', () => {
     expect(sessionKey).toBeDefined();
     expect(sessionKey).toHaveProperty('sign');
   });
+
+  it('应该能够缓存和复用会话密钥', async () => {
+    const address = '0x123456789abcdef';
+    const packageId = '0x12345';
+    
+    // 第一次应该创建新的会话密钥
+    const sessionKey1 = await getOrCreateSessionKey(address, packageId, keypair);
+    expect(sessionKey1).toBeDefined();
+    
+    // 第二次应该复用缓存的会话密钥
+    const sessionKey2 = await getOrCreateSessionKey(address, packageId, keypair);
+    expect(sessionKey2).toBe(sessionKey1); // 应该是同一个对象引用
+  });
   
   it('应该能够解密卡牌', async () => {
     const encryptedCard: EncryptedCard = {
       id: 'card-1',
-      encryptedData: new Uint8Array([1, 2, 3])
+      encryptedData: new Uint8Array([1, 2, 3]),
+      threshold: 2,
+      innerIds: ['server1', 'server2', 'server3']
     };
     
     const address = '0x123456789abcdef';
@@ -189,13 +207,39 @@ describe('加密操作', () => {
     expect(decryptedCard.type).toBe('normal');
     expect(decryptedCard.value).toBe(5);
   });
+
+  it('应该能处理解密权限错误', async () => {
+    // 模拟SealClient抛出权限错误
+    const mockSealClient = {
+      decrypt: vi.fn().mockRejectedValue(new Error('用户无权访问此资源'))
+    };
+    
+    const encryptedCard: EncryptedCard = {
+      id: 'card-1',
+      encryptedData: new Uint8Array([1, 2, 3]),
+      threshold: 2,
+      innerIds: ['server1', 'server2', 'server3']
+    };
+
+    const address = '0x123456789abcdef';
+    const packageId = '0x12345';
+    const sessionKey = await createSessionKey(address, packageId, keypair);
+    
+    await expect(decryptCard(
+      mockSealClient as any,
+      suiClient,
+      encryptedCard,
+      sessionKey,
+      packageId
+    )).rejects.toThrow(PermissionError);
+  });
   
   it('应该能够查看牌组顶部的卡牌', async () => {
     const deck: EncryptedCard[] = [
-      { id: 'card-1', encryptedData: new Uint8Array([1, 2, 3]) },
-      { id: 'card-2', encryptedData: new Uint8Array([4, 5, 6]) },
-      { id: 'card-3', encryptedData: new Uint8Array([7, 8, 9]) },
-      { id: 'card-bomb', encryptedData: new Uint8Array([10, 11, 12]) }
+      { id: 'card-1', encryptedData: new Uint8Array([1, 2, 3]), threshold: 2, innerIds: ['server1', 'server2', 'server3'] },
+      { id: 'card-2', encryptedData: new Uint8Array([4, 5, 6]), threshold: 2, innerIds: ['server1', 'server2', 'server3'] },
+      { id: 'card-3', encryptedData: new Uint8Array([7, 8, 9]), threshold: 2, innerIds: ['server1', 'server2', 'server3'] },
+      { id: 'card-bomb', encryptedData: new Uint8Array([10, 11, 12]), threshold: 2, innerIds: ['server1', 'server2', 'server3'] }
     ];
     
     const address = '0x123456789abcdef';
