@@ -1,0 +1,40 @@
+{
+  "rewrites": [
+    {
+      "source": "/aggregator1/:path*",
+      "destination": "https://aggregator.walrus-testnet.walrus.space/:path*"
+    },
+    {
+      "source": "/aggregator2/:path*",
+      "destination": "https://wal-aggregator-testnet.staketab.org/:path*"
+    },
+    {
+      "source": "/aggregator3/:path*",
+      "destination": "https://walrus-testnet-aggregator.redundex.com/:path*"
+    },
+    {
+      "source": "/aggregator4/:path*",
+      "destination": "https://https://walrus-testnet-aggregator.trusted-point.com/:path*"
+    },
+    {
+      "source": "/publisher1/:path*",
+      "destination": "https://publisher.walrus-testnet.walrus.space/:path*"
+    },
+    {
+      "source": "/publisher2/:path*",
+      "destination": "https://wal-publisher-testnet.staketab.org/:path*"
+    },
+    {
+      "source": "/publisher3/:path*",
+      "destination": "https://walrus-testnet-publisher.redundex.com/:path*"
+    },
+    {
+      "source": "/publisher4/:path*",
+      "destination": "https://walrus-testnet-publisher.trusted-point.com/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
