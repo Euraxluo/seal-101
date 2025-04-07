@@ -114,7 +114,7 @@ describe('游戏初始化', () => {
   
   it('应该能正确生成初始牌组', () => {
     const deck = generateInitialDeck();
-    
+    console.log('deck', deck);
     // 验证牌组中牌的数量
     expect(deck.length).toBeGreaterThan(0);
     
