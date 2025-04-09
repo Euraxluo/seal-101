@@ -162,7 +162,7 @@ impl SealTestCluster {
     pub async fn publish(&mut self, module: &str) -> (ObjectID, ObjectID) {
         // 构建模块路径
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.extend(["..", "..", "move", module]);
+        path.extend(["..", "..", "example", module]);
         let compiled_package = BuildConfig::new_for_testing().build(&path).unwrap();
 
         // 发布包
@@ -224,7 +224,7 @@ impl SealTestCluster {
     ) -> ObjectID {
         // 构建模块路径
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.extend(["..", "..", "move", module]);
+        path.extend(["..", "..", "example", module]);
         let compiled_package = BuildConfig::new_for_testing().build(&path).unwrap();
 
         // 准备升级
