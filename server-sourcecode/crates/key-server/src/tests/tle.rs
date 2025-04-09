@@ -335,6 +335,7 @@ fn tle_create_ptb(package_id: ObjectID, time: u64) -> ProgrammableTransaction {
     
     // 添加TLE ID参数（基于时间）
     let id = builder.pure(get_tle_id(time)).unwrap();
+    let id_0 = builder.pure(get_tle_id(0)).unwrap(); // used to test ptb with 2 commands
     
     // 添加时钟对象引用
     let clock = builder.obj(ObjectArg::SharedObject {
@@ -350,6 +351,13 @@ fn tle_create_ptb(package_id: ObjectID, time: u64) -> ProgrammableTransaction {
         Identifier::new("seal_approve").unwrap(),
         vec![],
         vec![id, clock],
+    );
+    builder.programmable_move_call(
+        package_id,
+        Identifier::new("tle").unwrap(),
+        Identifier::new("seal_approve").unwrap(),
+        vec![],
+        vec![id_0, clock],
     );
     
     // 完成事务构建并返回
